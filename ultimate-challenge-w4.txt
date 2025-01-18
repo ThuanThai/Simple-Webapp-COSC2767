@@ -1,0 +1,111 @@
+#!/bin/bash
+
+# Define the lines to add
+lines="export M2_HOME=/opt/maven
+export M2=/opt/maven/bin
+export JAVA_HOME=/usr/lib/jvm/java-17-amazon-corretto.x86_64
+export PATH=\$PATH:\$JAVA_HOME/bin:\$M2"
+# Install Java 17
+yum install -y java-17-amazon-corretto || { echo "Error: Failed to install Java."; exit 1; }
+java -version || { echo "Error: Java installation verification failed."; exit 1; }
+
+# Install Maven
+cd /opt
+if [ -f "apache-maven-3.9.9-bin.tar.gz" ]; then
+    echo "Maven has been installed"
+    exit 1
+else
+    wget https://dlcdn.apache.org/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz || { echo "Error: Failed to download Maven."; exit 1; }
+	tar -xvzf apache-maven-3.9.9-bin.tar.gz
+	mv apache-maven-3.9.9 maven
+	./maven/bin/mvn -v || { echo "Error: Failed to verify Maven installation."; exit 1; }
+fi
+
+# Check if the lines already exist
+if ! grep -qF "export M2_HOME=/opt/maven" ~/.bash_profile; then
+    echo "$lines" >> ~/.bash_profile
+    echo "Environment variables added to ~/.bash_profile"
+else
+    echo "Environment variables already exist in ~/.bash_profile"
+fi
+
+cd
+source .bash_profile
+
+# Install Tomcat 
+# Install Tomcatls
+cd /opt
+if [ -f "apache-tomcat-9.0.97.tar.gz" ]; then
+    echo "Tomcat has been installed"
+else
+   wget https://dlcdn.apache.org/tomcat/tomcat-9/v9.0.98/bin/apache-tomcat-9.0.98.tar.gz || { echo "Error: Failed to download Tomcat."; exit 1; }
+   tar -xvzf apache-tomcat-9.0.97.tar.gz
+   mv apache-tomcat-9.0.97 tomcat
+fi
+
+# Maven project setup
+if [ -d "automation" ]; then
+    echo "Directory 'automation' already exists. Removing it..."
+    rm -rf automation
+fi
+mvn archetype:generate -DgroupId=vn.edu.rmit -DartifactId=automation -DarchetypeArtifactId=maven-archetype-webapp -DinteractiveMode=false || {
+    echo "Error: Maven archetype generation failed.";
+    exit 1;
+}
+
+# Build the project
+cd automation
+mvn package || { echo "Error: Maven build failed."; exit 1; }
+cd ..
+
+# Deploy WAR file
+if [ -f "automation/target/automation.war" ]; then
+    cp automation/target/automation.war /opt/tomcat/webapps/
+else
+    echo "Error: WAR file not found. Deployment aborted."
+    exit 1
+fi
+
+# Install Tomcat
+wget https://dlcdn.apache.org/tomcat/tomcat-9/v9.0.97/bin/apache-tomcat-9.0.97.tar.gz || { echo "Error: Failed to download Tomcat."; exit 1; }
+tar -xvzf apache-tomcat-9.0.97.tar.gz
+mv apache-tomcat-9.0.97 tomcat
+
+# Configure Tomcat 
+sed -i '/<Valve/,/>/d' /opt/tomcat/webapps/docs/META-INF/context.xml
+sed -i '/<Valve/,/>/d' /opt/tomcat/webapps/examples/META-INF/context.xml
+sed -i '/<Valve/,/>/d' /opt/tomcat/webapps/host-manager/META-INF/context.xml
+sed -i '/<Valve/,/>/d' /opt/tomcat/webapps/manager/META-INF/context.xml
+
+echo '<role rolename="admin-gui"/>
+<role rolename="manager-gui"/>
+<role rolename="manager-script"/>
+<role rolename="manager-jmx"/>
+<role rolename="manager-status"/>
+<user username="admin" password="s3cret" roles="admin-gui,manager-gui,manager-script,manager-jmx,manager-status"/>' > /tmp/new_content.xml
+
+sed -i '/version="1.0">/r /tmp/new_content.xml' /opt/tomcat/conf/tomcat-users.xml
+
+
+# Run Tomcat 
+cd /opt/tomcat/bin
+./startup.sh
+
+if [ -L "/usr/local/bin/tomcatup" ]; then
+    echo "Symbolic link '/usr/local/bin/tomcatup' exists. Removing it..."
+    rm -f /usr/local/bin/tomcatup
+fi
+ln -s /opt/tomcat/bin/startup.sh /usr/local/bin/tomcatup
+
+if [ -L "/usr/local/bin/tomcatdown" ]; then
+    echo "Symbolic link '/usr/local/bin/tomcatdown' exists. Removing it..."
+    rm -f /usr/local/bin/tomcatdown
+fi
+ln -s /opt/tomcat/bin/shutdown.sh /usr/local/bin/tomcatdown
+
+# Change Tomcat port (be cautious with this)
+sed -i 's/port="8080"/port="80"/g' /opt/tomcat/conf/server.xml
+
+# Start Tomcat
+tomcatdown
+tomcatup
